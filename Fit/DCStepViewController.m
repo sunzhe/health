@@ -7,6 +7,8 @@
 //
 
 #import "DCStepViewController.h"
+#include <sys/types.h>
+#include <sys/sysctl.h>
 
 @interface DCStepViewController ()<UITextFieldDelegate>
 @property (weak, nonatomic) IBOutlet UILabel *readStepLabel;
@@ -41,6 +43,7 @@
     HKStatisticsQuery *query = [[HKStatisticsQuery alloc] initWithQuantityType:quantityType quantitySamplePredicate:predicate options:HKStatisticsOptionCumulativeSum|HKStatisticsOptionSeparateBySource completionHandler:^(HKStatisticsQuery *query, HKStatistics *result, NSError *error) {
         HKQuantity *sum = [result sumQuantity];
         //sum = [result sumQuantityForSource:[HKSource defaultSource]];
+        //失败就在这里 私自添加的和系统添加的source 不同.   微信运动区分了这块, 不过QQ和其他记步还没有区分
         for (HKSource *source in result.sources) {
             if ([source.name isEqualToString:[UIDevice currentDevice].name]) {
                 NSLog(@"%@ -- %f",source, [[result sumQuantityForSource:source] doubleValueForUnit:[HKUnit countUnit]]);
@@ -110,26 +113,29 @@
             }
         });
     }];
-    return;
-    HKQuantitySample *stepCorrelationItem = samples.firstObject;
-    [self.healthStore saveObject:stepCorrelationItem withCompletion:^(BOOL success, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (success) {
-                [self.view endEditing:YES];
-                UIAlertView *doneAlertView = [[UIAlertView alloc] initWithTitle:@"提示" message:@"添加成功" delegate:nil cancelButtonTitle:@"确定" otherButtonTitles:nil, nil];
-                [doneAlertView show];
-            }
-            else {
-                NSLog(@"The error was: %@.", error);
-                UIAlertView *doneAlertView = [[UIAlertView alloc] initWithTitle:@"提示" message:@"添加失败" delegate:nil cancelButtonTitle:@"确定" otherButtonTitles:nil, nil];
-                [doneAlertView show];
-                return ;
-            }
-        });
-    }];
-    
 }
 
+- (NSString *)getCurrentDeviceModel
+{
+    static NSString *platform = nil;
+    if (platform != nil) {
+        return platform;
+    }
+    int mib[2];
+    size_t len;
+    char *machine;
+    
+    mib[0] = CTL_HW;
+    mib[1] = HW_MACHINE;
+    sysctl(mib, 2, NULL, &len, NULL, 0);
+    machine = malloc(len);
+    sysctl(mib, 2, machine, &len, NULL, 0);
+    
+    platform = [NSString stringWithCString:machine encoding:NSASCIIStringEncoding];
+    free(machine);
+    //@"iPhone8,1"
+    return platform;
+}
 - (NSArray *)stepCorrelationWithStepNum:(double)stepNum {
     NSDate *endDate = [[NSDate date] dateByAddingTimeInterval:-38];
     NSDate *startDate = [NSDate dateWithTimeInterval:-59 sinceDate:endDate];
@@ -139,15 +145,18 @@
     HKQuantityType *stepConsumedType = [HKQuantityType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
     
     UIDevice *cdevice = [UIDevice currentDevice];
-    HKDevice *device = [[HKDevice alloc] initWithName:cdevice.model manufacturer:@"Apple" model:cdevice.model hardwareVersion:@"iPhone8,1" firmwareVersion:nil softwareVersion:cdevice.systemVersion localIdentifier:nil UDIDeviceIdentifier:nil];
+    //仿造系统应用记步... (失败.)
+    HKDevice *device = [[HKDevice alloc] initWithName:cdevice.model manufacturer:@"Apple" model:cdevice.model hardwareVersion:[self getCurrentDeviceModel] firmwareVersion:nil softwareVersion:cdevice.systemVersion localIdentifier:nil UDIDeviceIdentifier:nil];
 //    NSDictionary *stepCorrelationMetadata = @{HKMetadataKeyUDIDeviceIdentifier: @"aaron's test equipment",
 //                                                  HKMetadataKeyDeviceName:@"iPhone",
 //                                                  HKMetadataKeyWorkoutBrandName:@"Apple",
 //                                                  HKMetadataKeyDeviceManufacturerName:@"Apple"};
+    //步数
     HKQuantitySample *stepConsumedSample = [HKQuantitySample quantitySampleWithType:stepConsumedType quantity:stepQuantityConsumed startDate:startDate endDate:endDate device:device metadata:nil];
     
     HKQuantityType *distanceType = [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceWalkingRunning];
     
+    //步行距离.
     HKQuantity *distanceQuantityConsumed = [HKQuantity quantityWithUnit:[HKUnit meterUnit] doubleValue:stepNum*0.5];
     HKQuantitySample *distanceConsumedSample = [HKQuantitySample quantitySampleWithType:distanceType quantity:distanceQuantityConsumed startDate:startDate endDate:endDate device:device metadata:nil];
     
